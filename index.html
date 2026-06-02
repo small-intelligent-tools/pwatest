@@ -4,44 +4,38 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 
-<title>Yandex WebDAV Test</title>
+<title>Yandex WebDAV PUT Test</title>
 
 <link rel="manifest" href="manifest.json">
-
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.7/dist/css/bootstrap.min.css" rel="stylesheet">
 </head>
 <body>
 
 <div class="container mt-4">
 
-    <h3>Yandex WebDAV Test</h3>
+    <h3>Yandex WebDAV PUT Test</h3>
 
     <div class="mb-3">
         <label class="form-label">Логин Яндекс</label>
-        <input type="text" class="form-control" id="login">
+        <input type="text" class="form-control" id="login" autocomplete="username">
     </div>
 
     <div class="mb-3">
         <label class="form-label">Пароль приложения</label>
-        <input type="password" class="form-control" id="password">
+        <input type="password" class="form-control" id="password" autocomplete="current-password">
     </div>
 
-    <button class="btn btn-primary" id="saveBtn">
-        Сохранить
-    </button>
-
-    <button class="btn btn-success" id="testBtn">
-        Тест загрузки
-    </button>
+    <button class="btn btn-primary" id="saveBtn">Сохранить</button>
+    <button class="btn btn-success" id="putBtn">PUT test.txt</button>
+    <button class="btn btn-secondary" id="getBtn">GET test.txt</button>
 
     <hr>
 
-    <pre id="result"></pre>
+    <pre id="result" style="white-space: pre-wrap;"></pre>
 
 </div>
 
 <script>
-
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js');
 }
@@ -49,11 +43,15 @@ if ('serviceWorker' in navigator) {
 const loginInput = document.getElementById('login');
 const passwordInput = document.getElementById('password');
 const result = document.getElementById('result');
-let lastRequestMeta = {
-    stage: 'n/a',
-    method: 'n/a',
-    url: 'n/a'
-};
+
+const FILE_URL = 'https://webdav.yandex.ru/spaupdates/test.txt';
+
+loginInput.value = localStorage.getItem('yandex_login') || '';
+passwordInput.value = localStorage.getItem('yandex_password') || '';
+
+function log(text) {
+    result.textContent = text;
+}
 
 function headersToText(headers) {
     const items = [];
@@ -62,152 +60,112 @@ function headersToText(headers) {
         items.push(`${key}: ${value}`);
     }
 
-    return items.length
-        ? items.join('\n')
-        : '(нет заголовков)';
+    return items.length ? items.join('\n') : '(нет доступных заголовков)';
 }
 
-function formatFetchError(error, meta) {
-    const lines = [
-        'Ошибка запроса',
-        '',
-        `Шаг: ${meta.stage}`,
-        `Метод: ${meta.method}`,
-        `URL: ${meta.url}`,
-        `Online: ${navigator.onLine ? 'yes' : 'no'}`,
-        '',
-        `name: ${error?.name || 'UnknownError'}`,
-        `message: ${error?.message || String(error)}`
-    ];
-
-    if (error?.cause) {
-        lines.push(`cause: ${String(error.cause)}`);
-    }
-
-    if (error?.stack) {
-        lines.push('', 'stack:', error.stack);
-    }
-
-    return lines.join('\n');
-}
-
-async function fetchWithMeta(stage, url, options) {
-    lastRequestMeta = {
-        stage,
-        method: options?.method || 'GET',
-        url
-    };
-
-    return fetch(url, options);
-}
-
-loginInput.value = localStorage.getItem('yandex_login') || '';
-passwordInput.value = localStorage.getItem('yandex_password') || '';
-
-document.getElementById('saveBtn').addEventListener('click', () => {
-
-    localStorage.setItem(
-        'yandex_login',
-        loginInput.value.trim()
-    );
-
-    localStorage.setItem(
-        'yandex_password',
-        passwordInput.value
-    );
-
-    result.textContent = 'Сохранено';
-});
-
-document.getElementById('testBtn').addEventListener('click', async () => {
-
+function getAuthHeader() {
     const login = loginInput.value.trim();
     const password = passwordInput.value;
 
     if (!login || !password) {
-        result.textContent = 'Введите логин и пароль';
-        return;
+        throw new Error('Введите логин и пароль приложения');
     }
 
-    result.textContent = 'Создаем папку...';
+    return 'Basic ' + btoa(`${login}:${password}`);
+}
 
-    const auth = btoa(`${login}:${password}`);
+function formatError(error, stage) {
+    return [
+        'Ошибка запроса',
+        '',
+        `Шаг: ${stage}`,
+        `URL: ${FILE_URL}`,
+        `Online: ${navigator.onLine ? 'yes' : 'no'}`,
+        '',
+        `name: ${error?.name || 'UnknownError'}`,
+        `message: ${error?.message || String(error)}`,
+        '',
+        'Вероятно, это CORS/preflight, если ошибка: TypeError: Load failed / Failed to fetch.'
+    ].join('\n');
+}
+
+async function readResponse(response) {
+    let body = '';
 
     try {
+        body = await response.text();
+    } catch (e) {
+        body = '(не удалось прочитать body)';
+    }
 
-        const folderUrl =
-            'https://webdav.yandex.ru/spaupdates';
+    return [
+        `HTTP STATUS: ${response.status} ${response.statusText}`,
+        `OK: ${response.ok}`,
+        '',
+        'Headers:',
+        headersToText(response.headers),
+        '',
+        'Body:',
+        body || '(пустой ответ)'
+    ].join('\n');
+}
 
-        const mkcolResponse = await fetchWithMeta(
-            'Создание папки',
-            folderUrl,
-            {
-                method: 'MKCOL',
-                headers: {
-                    'Authorization': `Basic ${auth}`
-                }
-            }
+document.getElementById('saveBtn').addEventListener('click', () => {
+    localStorage.setItem('yandex_login', loginInput.value.trim());
+    localStorage.setItem('yandex_password', passwordInput.value);
+
+    log('Сохранено');
+});
+
+document.getElementById('putBtn').addEventListener('click', async () => {
+    log('PUT: загружаем файл...');
+
+    try {
+        const response = await fetch(FILE_URL, {
+            method: 'PUT',
+            mode: 'cors',
+            cache: 'no-store',
+            headers: {
+                'Authorization': getAuthHeader(),
+                'Content-Type': 'text/plain;charset=utf-8'
+            },
+            body:
+                'Hello from iPhone PWA\n' +
+                'Time: ' + new Date().toISOString() + '\n'
+        });
+
+        log(
+            'PUT завершен\n\n' +
+            await readResponse(response)
         );
-
-        const mkcolBody = await mkcolResponse.text();
-
-        if (![200, 201, 204, 405].includes(mkcolResponse.status)) {
-            result.textContent = [
-                'Ошибка создания папки',
-                `HTTP STATUS: ${mkcolResponse.status} ${mkcolResponse.statusText}`,
-                '',
-                'Headers:',
-                headersToText(mkcolResponse.headers),
-                '',
-                'Body:',
-                mkcolBody || '(пустой ответ)'
-            ].join('\n');
-            return;
-        }
-
-        result.textContent = 'Загружаем файл...';
-
-        const uploadUrl =
-            'https://webdav.yandex.ru/spaupdates/test.txt';
-
-        const response = await fetchWithMeta(
-            'Загрузка файла',
-            uploadUrl,
-            {
-                method: 'PUT',
-                headers: {
-                    'Authorization': `Basic ${auth}`,
-                    'Content-Type': 'text/plain'
-                },
-                body:
-                    'Hello from PWA\n' +
-                    new Date().toISOString()
-            }
-        );
-
-        const responseBody = await response.text();
-
-        result.textContent =
-            (response.ok
-                ? 'Загрузка завершена'
-                : 'Ошибка загрузки файла') +
-            '\n\n' +
-            'HTTP STATUS: ' + response.status + ' ' + response.statusText +
-            '\n' +
-            'OK: ' + response.ok +
-            '\n\n' +
-            'Headers:\n' +
-            headersToText(response.headers) +
-            '\n\n' +
-            'Body:\n' +
-            (responseBody || '(пустой ответ)');
 
     } catch (e) {
-
-        result.textContent = formatFetchError(e, lastRequestMeta);
+        log(formatError(e, 'PUT test.txt'));
     }
 });
 
+document.getElementById('getBtn').addEventListener('click', async () => {
+    log('GET: читаем файл...');
+
+    try {
+        const response = await fetch(FILE_URL + '?_=' + Date.now(), {
+            method: 'GET',
+            mode: 'cors',
+            cache: 'no-store',
+            headers: {
+                'Authorization': getAuthHeader()
+            }
+        });
+
+        log(
+            'GET завершен\n\n' +
+            await readResponse(response)
+        );
+
+    } catch (e) {
+        log(formatError(e, 'GET test.txt'));
+    }
+});
 </script>
 
 </body>
