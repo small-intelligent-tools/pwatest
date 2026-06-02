@@ -49,6 +49,57 @@ if ('serviceWorker' in navigator) {
 const loginInput = document.getElementById('login');
 const passwordInput = document.getElementById('password');
 const result = document.getElementById('result');
+let lastRequestMeta = {
+    stage: 'n/a',
+    method: 'n/a',
+    url: 'n/a'
+};
+
+function headersToText(headers) {
+    const items = [];
+
+    for (const [key, value] of headers.entries()) {
+        items.push(`${key}: ${value}`);
+    }
+
+    return items.length
+        ? items.join('\n')
+        : '(нет заголовков)';
+}
+
+function formatFetchError(error, meta) {
+    const lines = [
+        'Ошибка запроса',
+        '',
+        `Шаг: ${meta.stage}`,
+        `Метод: ${meta.method}`,
+        `URL: ${meta.url}`,
+        `Online: ${navigator.onLine ? 'yes' : 'no'}`,
+        '',
+        `name: ${error?.name || 'UnknownError'}`,
+        `message: ${error?.message || String(error)}`
+    ];
+
+    if (error?.cause) {
+        lines.push(`cause: ${String(error.cause)}`);
+    }
+
+    if (error?.stack) {
+        lines.push('', 'stack:', error.stack);
+    }
+
+    return lines.join('\n');
+}
+
+async function fetchWithMeta(stage, url, options) {
+    lastRequestMeta = {
+        stage,
+        method: options?.method || 'GET',
+        url
+    };
+
+    return fetch(url, options);
+}
 
 loginInput.value = localStorage.getItem('yandex_login') || '';
 passwordInput.value = localStorage.getItem('yandex_password') || '';
@@ -87,39 +138,73 @@ document.getElementById('testBtn').addEventListener('click', async () => {
         const folderUrl =
             'https://webdav.yandex.ru/spaupdates';
 
-        await fetch(folderUrl, {
-            method: 'MKCOL',
-            headers: {
-                'Authorization': `Basic ${auth}`
+        const mkcolResponse = await fetchWithMeta(
+            'Создание папки',
+            folderUrl,
+            {
+                method: 'MKCOL',
+                headers: {
+                    'Authorization': `Basic ${auth}`
+                }
             }
-        });
+        );
+
+        const mkcolBody = await mkcolResponse.text();
+
+        if (![200, 201, 204, 405].includes(mkcolResponse.status)) {
+            result.textContent = [
+                'Ошибка создания папки',
+                `HTTP STATUS: ${mkcolResponse.status} ${mkcolResponse.statusText}`,
+                '',
+                'Headers:',
+                headersToText(mkcolResponse.headers),
+                '',
+                'Body:',
+                mkcolBody || '(пустой ответ)'
+            ].join('\n');
+            return;
+        }
 
         result.textContent = 'Загружаем файл...';
 
         const uploadUrl =
             'https://webdav.yandex.ru/spaupdates/test.txt';
 
-        const response = await fetch(uploadUrl, {
-            method: 'PUT',
-            headers: {
-                'Authorization': `Basic ${auth}`,
-                'Content-Type': 'text/plain'
-            },
-            body:
-                'Hello from PWA\n' +
-                new Date().toISOString()
-        });
+        const response = await fetchWithMeta(
+            'Загрузка файла',
+            uploadUrl,
+            {
+                method: 'PUT',
+                headers: {
+                    'Authorization': `Basic ${auth}`,
+                    'Content-Type': 'text/plain'
+                },
+                body:
+                    'Hello from PWA\n' +
+                    new Date().toISOString()
+            }
+        );
+
+        const responseBody = await response.text();
 
         result.textContent =
-            'HTTP STATUS: ' + response.status +
+            (response.ok
+                ? 'Загрузка завершена'
+                : 'Ошибка загрузки файла') +
             '\n\n' +
-            await response.text();
+            'HTTP STATUS: ' + response.status + ' ' + response.statusText +
+            '\n' +
+            'OK: ' + response.ok +
+            '\n\n' +
+            'Headers:\n' +
+            headersToText(response.headers) +
+            '\n\n' +
+            'Body:\n' +
+            (responseBody || '(пустой ответ)');
 
     } catch (e) {
 
-        result.textContent =
-            'Ошибка:\n\n' +
-            e.toString();
+        result.textContent = formatFetchError(e, lastRequestMeta);
     }
 });
 
