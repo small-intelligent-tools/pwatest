@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<title>Yandex Disk REST API Test</title>
+
+<link rel="manifest" href="manifest.json">
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.7/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body>
+
+<div class="container mt-4">
+
+    <h3>Yandex Disk REST API Test</h3>
+
+    <div class="mb-3">
+        <label class="form-label">OAuth-токен Яндекс</label>
+        <input type="password" class="form-control" id="token" autocomplete="off">
+    </div>
+
+    <button class="btn btn-primary" id="saveBtn">Сохранить</button>
+    <button class="btn btn-success" id="testBtn">REST upload test.txt</button>
+    <button class="btn btn-secondary" id="readBtn">REST read test.txt</button>
+
+    <hr>
+
+    <pre id="result" style="white-space: pre-wrap;"></pre>
+
+</div>
+
+<script>
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('./sw.js');
+}
+
+const tokenInput = document.getElementById('token');
+const result = document.getElementById('result');
+
+const API_BASE = 'https://cloud-api.yandex.net/v1/disk';
+const DISK_DIR = '/spaupdates';
+const DISK_FILE = '/spaupdates/test.txt';
+
+tokenInput.value = localStorage.getItem('yandex_oauth_token') || '';
+
+function log(text) {
+    result.textContent = text;
+}
+
+function getToken() {
+    const token = tokenInput.value.trim();
+
+    if (!token) {
+        throw new Error('Введите OAuth-токен Яндекс');
+    }
+
+    return token;
+}
+
+function headersToText(headers) {
+    const items = [];
+
+    for (const [key, value] of headers.entries()) {
+        items.push(`${key}: ${value}`);
+    }
+
+    return items.length ? items.join('\n') : '(нет доступных заголовков)';
+}
+
+function formatError(error, stage) {
+    return [
+        'Ошибка запроса',
+        '',
+        `Шаг: ${stage}`,
+        `Online: ${navigator.onLine ? 'yes' : 'no'}`,
+        '',
+        `name: ${error?.name || 'UnknownError'}`,
+        `message: ${error?.message || String(error)}`,
+        '',
+        'Если здесь TypeError: Load failed / Failed to fetch — вероятно, CORS.'
+    ].join('\n');
+}
+
+async function readResponse(response) {
+    let body = '';
+
+    try {
+        body = await response.text();
+    } catch (e) {
+        body = '(не удалось прочитать body)';
+    }
+
+    return [
+        `HTTP STATUS: ${response.status} ${response.statusText}`,
+        `OK: ${response.ok}`,
+        '',
+        'Headers:',
+        headersToText(response.headers),
+        '',
+        'Body:',
+        body || '(пустой ответ)'
+    ].join('\n');
+}
+
+async function apiFetch(url, options = {}) {
+    const token = getToken();
+
+    const response = await fetch(url, {
+        ...options,
+        mode: 'cors',
+        cache: 'no-store',
+        headers: {
+            ...(options.headers || {}),
+            'Authorization': `OAuth ${token}`
+        }
+    });
+
+    return response;
+}
+
+async function ensureDir() {
+    const url =
+        API_BASE +
+        '/resources?path=' +
+        encodeURIComponent(DISK_DIR);
+
+    const response = await apiFetch(url, {
+        method: 'PUT'
+    });
+
+    if ([200, 201, 409].includes(response.status)) {
+        return;
+    }
+
+    throw new Error(
+        'Не удалось создать папку: ' +
+        response.status + ' ' +
+        await response.text()
+    );
+}
+
+async function getUploadHref() {
+    const url =
+        API_BASE +
+        '/resources/upload?path=' +
+        encodeURIComponent(DISK_FILE) +
+        '&overwrite=true';
+
+    const response = await apiFetch(url, {
+        method: 'GET'
+    });
+
+    if (!response.ok) {
+        throw new Error(
+            'Не удалось получить upload href: ' +
+            response.status + ' ' +
+            await response.text()
+        );
+    }
+
+    const data = await response.json();
+
+    if (!data.href) {
+        throw new Error('В ответе нет href');
+    }
+
+    return data.href;
+}
+
+async function getDownloadHref() {
+    const url =
+        API_BASE +
+        '/resources/download?path=' +
+        encodeURIComponent(DISK_FILE);
+
+    const response = await apiFetch(url, {
+        method: 'GET'
+    });
+
+    if (!response.ok) {
+        throw new Error(
+            'Не удалось получить download href: ' +
+            response.status + ' ' +
+            await response.text()
+        );
+    }
+
+    const data = await response.json();
+
+    if (!data.href) {
+        throw new Error('В ответе нет href');
+    }
+
+    return data.href;
+}
+
+document.getElementById('saveBtn').addEventListener('click', () => {
+    localStorage.setItem('yandex_oauth_token', tokenInput.value.trim());
+    log('Сохранено');
+});
+
+document.getElementById('testBtn').addEventListener('click', async () => {
+    try {
+        log('Создаем папку через REST API...');
+
+        await ensureDir();
+
+        log('Получаем upload href...');
+
+        const uploadHref = await getUploadHref();
+
+        log('Загружаем test.txt...');
+
+        const body =
+            'Hello from iPhone PWA via Yandex REST API\n' +
+            'Time: ' + new Date().toISOString() + '\n';
+
+        const uploadResponse = await fetch(uploadHref, {
+            method: 'PUT',
+            mode: 'cors',
+            cache: 'no-store',
+            headers: {
+                'Content-Type': 'text/plain;charset=utf-8'
+            },
+            body
+        });
+
+        log(
+            'UPLOAD завершен\n\n' +
+            await readResponse(uploadResponse)
+        );
+
+    } catch (e) {
+        log(formatError(e, 'REST upload test.txt'));
+    }
+});
+
+document.getElementById('readBtn').addEventListener('click', async () => {
+    try {
+        log('Получаем download href...');
+
+        const downloadHref = await getDownloadHref();
+
+        log('Скачиваем test.txt...');
+
+        const downloadResponse = await fetch(downloadHref, {
+            method: 'GET',
+            mode: 'cors',
+            cache: 'no-store'
+        });
+
+        log(
+            'DOWNLOAD завершен\n\n' +
+            await readResponse(downloadResponse)
+        );
+
+    } catch (e) {
+        log(formatError(e, 'REST read test.txt'));
+    }
+});
+</script>
+
+</body>
+</html>
